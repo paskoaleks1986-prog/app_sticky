@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "app-sticky"
+dynamic = ["version"]
+description = "Route connections sharing an affinity key to the same Uvicorn worker."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Aleksandr Pasko", email = "paskoaleks1986@gmail.com" }]
+keywords = ["uvicorn", "asgi", "workers", "sticky-sessions", "websocket", "routing"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: AsyncIO",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Typing :: Typed",
+]
+dependencies = [
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pre-commit>=3.8",
+    "build>=1.2",
+    "twine>=5",
+    "uvicorn[standard]>=0.30",
+]
+
+examples = [
+    "fastapi>=0.115",
+    "django>=5.0",
+    "falcon>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/paskoaleks1986-prog/uvicorn-sticky"
+Repository = "https://github.com/paskoaleks1986-prog/uvicorn-sticky"
+Issues = "https://github.com/paskoaleks1986-prog/uvicorn-sticky/issues"
+Changelog = "https://github.com/paskoaleks1986-prog/uvicorn-sticky/blob/main/CHANGELOG.md"
+
+# ---------- hatch ----------
+[tool.hatch.version]
+path = "src/uvicorn_sticky/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/uvicorn_sticky"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "tests/", "README.md", "LICENSE", "CHANGELOG.md"]
+
+# ---------- ruff ----------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "C4",       # comprehensions
+    "RUF",      # ruff-specific
+    "ASYNC",    # async pitfalls
+    "PT",       # pytest style
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------- mypy ----------
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src", "tests"]
+
+# ---------- pytest ----------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --cov=uvicorn_sticky --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+source = ["uvicorn_sticky"]
