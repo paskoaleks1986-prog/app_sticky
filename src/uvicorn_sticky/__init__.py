@@ -2,4 +2,7 @@
 
 from uvicorn_sticky.__about__ import __version__
 
-__all__ = ["__version__"]
+from .config import StickyConfig
+from .runner import run
+
+__all__ = ["__version__",]

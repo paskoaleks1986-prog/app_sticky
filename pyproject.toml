@@ -100,6 +100,9 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers --cov=uvicorn_sticky --cov-report=term-missing"
 
+[project.scripts]
+uvicorn-sticky = "uvicorn_sticky.cli:main"
+
 [tool.coverage.run]
 branch = true
 source = ["uvicorn_sticky"]
