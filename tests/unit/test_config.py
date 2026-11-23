@@ -41,3 +41,9 @@ def test_bad_port_rejected(port):
 def test_label_without_index_rejected():
     with pytest.raises(ValueError, match="label"):
         StickyConfig(app="pkg.mod:app", label="worker")
+
+
+@pytest.mark.parametrize("label", ["node {index}", "w/{index}", "x" * 40 + "{index}"])
+def test_label_must_produce_valid_worker_name(label):
+    with pytest.raises(ValueError, match="label"):
+        StickyConfig(app="pkg.mod:app", label=label)

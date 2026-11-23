@@ -1,85 +1,58 @@
 """
-Worker: регистрируется у роутера со своим лейблом, получает от него готовые
-TCP-соединения (файловые дескрипторы) и обслуживает их.
+Воркер: отдельный процесс, в котором Uvicorn выполняет приложение.
 
-Запуск: python worker.py W1
+Шаг 2: воркер получает от раннера лейбл, сообщает его роутеру по служебному
+каналу и обслуживает общий слушающий сокет (соединения пока раздаёт ядро ОС).
 """
-import asyncio
 import os
 import socket
 import sys
+from dataclasses import dataclass
 
-CONTROL_PATH = f"/tmp/ordo-router-{os.getuid()}/ctl.sock"
-HEADER_TIMEOUT = 5.0
-MAX_HEADERS = 100
+import uvicorn
 
-
-async def handle(conn: socket.socket, label: str) -> None:
-    writer = None
-    try:
-        reader, writer = await asyncio.open_connection(sock=conn)
-        async with asyncio.timeout(HEADER_TIMEOUT):
-            request_line = await reader.readline()   # данные на месте: роутер только подсматривал
-            for _ in range(MAX_HEADERS):
-                if (await reader.readline()) in (b"\r\n", b""):
-                    break
-        body = f"handled by {label}: {request_line.decode('latin-1').strip()}\n".encode()
-        writer.write(
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
-            + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
-            + body
-        )
-        await writer.drain()
-    except (TimeoutError, OSError, ValueError) as e:
-        print(f"[{label}] connection dropped: {e!r}", flush=True)
-    finally:
-        if writer is not None:
-            writer.close()
-        else:
-            conn.close()                             # не теряем дескриптор при ранней ошибке
+from .config import StickyConfig
 
 
-async def main(label: str) -> None:
-    loop = asyncio.get_running_loop()
+@dataclass(frozen=True, slots=True)
+class WorkerInfo:
+    label: str        # имя воркера, например "W2"
+    index: int        # порядковый номер, с нуля
+    total: int        # сколько воркеров запущено всего
+
+
+_current: WorkerInfo | None = None
+_control: socket.socket | None = None     # держим канал открытым: по его обрыву роутер узнаёт о смерти воркера
+
+
+def current_worker() -> WorkerInfo | None:
+    """Сведения о воркере, в котором выполняется этот код. None, если запуск был не через uvicorn-sticky."""
+    return _current
+
+
+def _set_current(info: WorkerInfo | None) -> None:
+    global _current
+    _current = info
+
+
+def register(control_path: str, label: str) -> socket.socket:
+    """Подключиться к роутеру и назвать свой лейбл."""
     ctl = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        ctl.connect(CONTROL_PATH)
-        ctl.sendall(label.encode())
-    except OSError as e:
-        raise SystemExit(f"[{label}] cannot reach router: {e}")
-    ctl.setblocking(False)
-    print(f"[{label}] registered", flush=True)
-
-    tasks: set[asyncio.Task] = set()
-    while True:
-        fut = loop.create_future()
-        loop.add_reader(ctl.fileno(), lambda: fut.done() or fut.set_result(None))
-        try:
-            await fut
-        finally:
-            loop.remove_reader(ctl.fileno())
-        try:
-            msg, fds, _, _ = socket.recv_fds(ctl, 1, 1)
-        except BlockingIOError:
-            continue
-        except OSError as e:
-            print(f"[{label}] control channel error: {e}", flush=True)
-            return
-        if not msg:
-            print(f"[{label}] router gone (or registration rejected)", flush=True)
-            return
-        for fd in fds:
-            conn = socket.socket(fileno=fd)          # тот же TCP-сокет клиента
-            conn.setblocking(False)
-            t = asyncio.create_task(handle(conn, label))
-            tasks.add(t)
-            t.add_done_callback(tasks.discard)
+    ctl.connect(control_path)
+    ctl.sendall(label.encode())
+    return ctl
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: python worker.py <label>")
-    try:
-        asyncio.run(main(sys.argv[1]))
-    except KeyboardInterrupt:
-        pass
+def worker_main(config: StickyConfig, index: int, control_path: str, listener: socket.socket) -> None:
+    """Точка входа процесса-воркера. Вызывается раннером."""
+    global _control
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)                   # приложение ищется от текущей папки, как у Uvicorn
+
+    info = WorkerInfo(label=config.label_for(index), index=index, total=config.workers)
+    _set_current(info)                            # до импорта приложения: оно может спросить current_worker()
+    _control = register(control_path, info.label)
+
+    server = uvicorn.Server(uvicorn.Config(config.app, log_level=config.log_level))
+    server.run(sockets=[listener])                # блокирует, пока воркер не остановят

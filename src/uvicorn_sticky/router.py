@@ -13,6 +13,9 @@ import re
 import socket
 import stat
 import struct
+from collections.abc import Callable
+
+from .config import LABEL_RE
 
 HOST = "127.0.0.1"                 # не 0.0.0.0: снаружи доступен только Nginx
 TCP_PORT = 8000
@@ -20,7 +23,6 @@ RUN_DIR = f"/tmp/ordo-router-{os.getuid()}"
 CONTROL_PATH = f"{RUN_DIR}/ctl.sock"
 
 PATH_RE = re.compile(rb"^GET /ws/([0-9a-zA-Z-]{1,64})[ ?]")
-LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 MAX_PEEK = 2048                    # больше первой строки запроса читать незачем
 PEEK_TIMEOUT = 5.0                 # защита от slowloris
 REGISTER_TIMEOUT = 3.0
@@ -59,9 +61,22 @@ def reply(conn: socket.socket, status: str) -> None:
 
 
 class Router:
-    def __init__(self) -> None:
+    def __init__(self, control_path: str = CONTROL_PATH, host: str = HOST, port: int = TCP_PORT,
+                 on_change: Callable[[list[str]], None] | None = None) -> None:
+        self.control_path = control_path
+        self.host = host
+        self.port = port
+        self.on_change = on_change                    # вызывается при появлении и пропаже воркера
         self.workers: dict[str, socket.socket] = {}   # label -> control socket
         self.pending = 0
+        self.ready = asyncio.Event()                  # служебный сокет открыт, воркеры могут подключаться
+
+    def labels(self) -> list[str]:
+        return sorted(self.workers)
+
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change(self.labels())
 
     # ---------- регистрация воркеров ----------
 
@@ -69,11 +84,12 @@ class Router:
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         old = os.umask(0o177)      # сокет создаётся с правами 0600
         try:
-            srv.bind(CONTROL_PATH)
+            srv.bind(self.control_path)
         finally:
             os.umask(old)
         srv.listen()
         srv.setblocking(False)
+        self.ready.set()
         loop = asyncio.get_running_loop()
         while True:
             try:
@@ -87,6 +103,7 @@ class Router:
     async def register(self, ctl: socket.socket) -> None:
         loop = asyncio.get_running_loop()
         label = None
+        shutting_down = False
         try:
             uid = peer_uid(ctl)
             if uid is not None and uid != os.getuid():
@@ -103,14 +120,20 @@ class Router:
             label = name
             self.workers[label] = ctl
             log(f"worker registered: {label}")
+            self._changed()
             # Воркер больше ничего не шлёт. Чтение вернётся, только когда он умрёт.
             await loop.sock_recv(ctl, 1)
+        except asyncio.CancelledError:
+            shutting_down = True               # роутер останавливается: это не смерть воркера
+            raise
         except (asyncio.TimeoutError, OSError) as e:
             log(f"worker channel error: {e!r}")
         finally:
             if label is not None and self.workers.get(label) is ctl:
                 del self.workers[label]
-                log(f"worker gone: {label}")
+                if not shutting_down:
+                    log(f"worker gone: {label}")
+                    self._changed()
             ctl.close()
 
     # ---------- выбор воркера ----------
@@ -125,11 +148,11 @@ class Router:
     async def serve_tcp(self) -> None:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind((HOST, TCP_PORT))
+        srv.bind((self.host, self.port))
         srv.listen(512)
         srv.setblocking(False)
         loop = asyncio.get_running_loop()
-        log(f"listening on {HOST}:{TCP_PORT}")
+        log(f"listening on {self.host}:{self.port}")
         while True:
             try:
                 conn, _ = await loop.sock_accept(srv)

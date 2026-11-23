@@ -1,23 +1,26 @@
 """
-Пример: обычный Uvicorn с несколькими воркерами, только HTTP.
-Каждый воркер при старте получает лейбл и печатает его; GET показывает, кто ответил.
+Пример: HTTP-приложение, которое показывает, какой воркер ответил.
 
-Запуск:  uvicorn main:app --port 8000 --workers 4
+Через библиотеку:   uvicorn-sticky examples.fastapi_ex.main:app --workers 4
+Обычный Uvicorn:    uvicorn examples.fastapi_ex.main:app --workers 4
 """
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-LABEL = f"W{os.getpid()}"          # пока лейбл = PID процесса
-hits = 0                           # счётчик живёт в памяти ЭТОГО воркера
+from uvicorn_sticky import current_worker
+
+info = current_worker()                       # None, если запущено обычным Uvicorn
+LABEL = info.label if info else f"pid{os.getpid()}"
+hits = 0                                      # счётчик живёт в памяти ЭТОГО воркера
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"[{LABEL}] воркер запущен", flush=True)      # выполняется в каждом воркере
+    print(f"[{LABEL}] приложение запущено", flush=True)      # выполняется в каждом воркере
     yield
-    print(f"[{LABEL}] воркер остановлен, обработал {hits}", flush=True)
+    print(f"[{LABEL}] приложение остановлено, обработало {hits}", flush=True)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -27,4 +30,11 @@ app = FastAPI(lifespan=lifespan)
 async def who(key: str):
     global hits
     hits += 1
-    return {"worker": LABEL, "key": key, "hits_in_this_worker": hits}
+    return {
+        "worker": LABEL,
+        "index": info.index if info else None,
+        "total": info.total if info else None,
+        "pid": os.getpid(),
+        "key": key,
+        "hits_in_this_worker": hits,
+    }
