@@ -1,55 +1,38 @@
 """
-Router: держит TCP-порт, принимает соединения и передаёт их воркерам через
-Unix-сокет (SCM_RIGHTS). Все соединения одной игры идут в один воркер.
+Роутер: принимает соединения клиентов и передаёт каждое нужному воркеру через
+Unix-сокет (SCM_RIGHTS). Все соединения с одним ключом идут в один воркер.
 
-Рассчитан на работу ЗА reverse proxy (Nginx снимает TLS), поэтому слушает 127.0.0.1.
-
-Запуск: python router.py
+Работает внутри главного процесса (раннера). Рассчитан на работу за reverse proxy,
+который снимает TLS.
 """
+
 import asyncio
-import hashlib
 import os
-import re
 import socket
-import stat
 import struct
 from collections.abc import Callable
 
+from .balancing import pick_worker
 from .config import LABEL_RE
+from .key import extract_key, is_request_line
 
-HOST = "127.0.0.1"                 # не 0.0.0.0: снаружи доступен только Nginx
-TCP_PORT = 8000
-RUN_DIR = f"/tmp/ordo-router-{os.getuid()}"
-CONTROL_PATH = f"{RUN_DIR}/ctl.sock"
-
-PATH_RE = re.compile(rb"^GET /ws/([0-9a-zA-Z-]{1,64})[ ?]")
-MAX_PEEK = 2048                    # больше первой строки запроса читать незачем
-PEEK_TIMEOUT = 5.0                 # защита от slowloris
+MAX_PEEK = 2048  # больше первой строки запроса читать незачем
+PEEK_TIMEOUT = 5.0  # защита от slowloris
 REGISTER_TIMEOUT = 3.0
-MAX_PENDING = 1000                 # соединений, ещё не переданных воркеру
+MAX_PENDING = 1000  # соединений, ещё не переданных воркеру
 
 
 def log(msg: str) -> None:
     print(f"[router] {msg}", flush=True)
 
 
-def prepare_run_dir() -> None:
-    """Каталог для control-сокета: только наш, без доступа другим пользователям."""
-    os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
-    st = os.lstat(RUN_DIR)         # lstat: симлинк, подложенный в /tmp, не пройдёт
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
-        raise SystemExit(f"unsafe run dir {RUN_DIR}: wrong type, owner or mode")
-    try:
-        os.unlink(CONTROL_PATH)
-    except FileNotFoundError:
-        pass
-
-
 def peer_uid(sock: socket.socket) -> int | None:
     """UID процесса на другом конце Unix-сокета (Linux)."""
     if not hasattr(socket, "SO_PEERCRED"):
         return None
-    _pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+    _pid, uid, _gid = struct.unpack(
+        "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+    )
     return uid
 
 
@@ -57,19 +40,24 @@ def reply(conn: socket.socket, status: str) -> None:
     try:
         conn.send(f"HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode())
     except OSError:
-        pass                       # клиент уже ушёл: отвечать некому
+        pass  # клиент уже ушёл: отвечать некому
 
 
 class Router:
-    def __init__(self, control_path: str = CONTROL_PATH, host: str = HOST, port: int = TCP_PORT,
-                 on_change: Callable[[list[str]], None] | None = None) -> None:
+    def __init__(
+        self,
+        control_path: str,
+        on_change: Callable[[list[str]], None] | None = None,
+        peek_timeout: float = PEEK_TIMEOUT,
+    ) -> None:
         self.control_path = control_path
-        self.host = host
-        self.port = port
-        self.on_change = on_change                    # вызывается при появлении и пропаже воркера
-        self.workers: dict[str, socket.socket] = {}   # label -> control socket
+        self.on_change = on_change  # вызывается при появлении и пропаже воркера
+        self.peek_timeout = peek_timeout
+        self.workers: dict[str, socket.socket] = {}  # label -> control socket
         self.pending = 0
-        self.ready = asyncio.Event()                  # служебный сокет открыт, воркеры могут подключаться
+        self.ready = asyncio.Event()  # служебный сокет открыт, воркеры могут подключаться
+        self._round_robin = 0
+        self._tasks: set[asyncio.Task] = set()
 
     def labels(self) -> list[str]:
         return sorted(self.workers)
@@ -78,11 +66,16 @@ class Router:
         if self.on_change is not None:
             self.on_change(self.labels())
 
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)  # иначе сборщик мусора может удалить задачу
+        task.add_done_callback(self._tasks.discard)
+
     # ---------- регистрация воркеров ----------
 
     async def serve_control(self) -> None:
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        old = os.umask(0o177)      # сокет создаётся с правами 0600
+        old = os.umask(0o177)  # сокет создаётся с правами 0600
         try:
             srv.bind(self.control_path)
         finally:
@@ -91,14 +84,17 @@ class Router:
         srv.setblocking(False)
         self.ready.set()
         loop = asyncio.get_running_loop()
-        while True:
-            try:
-                ctl, _ = await loop.sock_accept(srv)
-            except OSError as e:
-                log(f"control accept failed: {e}")
-                await asyncio.sleep(0.1)
-                continue
-            asyncio.create_task(self.register(ctl))
+        try:
+            while True:
+                try:
+                    ctl, _ = await loop.sock_accept(srv)
+                except OSError as e:
+                    log(f"control accept failed: {e}")
+                    await asyncio.sleep(0.1)
+                    continue
+                self._spawn(self.register(ctl))
+        finally:
+            srv.close()
 
     async def register(self, ctl: socket.socket) -> None:
         loop = asyncio.get_running_loop()
@@ -124,9 +120,9 @@ class Router:
             # Воркер больше ничего не шлёт. Чтение вернётся, только когда он умрёт.
             await loop.sock_recv(ctl, 1)
         except asyncio.CancelledError:
-            shutting_down = True               # роутер останавливается: это не смерть воркера
+            shutting_down = True  # роутер останавливается: это не смерть воркера
             raise
-        except (asyncio.TimeoutError, OSError) as e:
+        except (TimeoutError, OSError) as e:
             log(f"worker channel error: {e!r}")
         finally:
             if label is not None and self.workers.get(label) is ctl:
@@ -138,64 +134,75 @@ class Router:
 
     # ---------- выбор воркера ----------
 
-    def pick_worker(self, gid: str) -> str:
-        """Rendezvous hashing: без таблицы gid -> воркер, значит нечему расти в памяти.
-        Если воркер пропал, переезжают только его игры."""
-        return max(self.workers, key=lambda w: hashlib.sha256(f"{w}|{gid}".encode()).digest())
+    def choose(self, key: str | None) -> str:
+        """Запрос с ключом идёт по хешу, без ключа — по кругу."""
+        labels = self.labels()
+        if key is not None:
+            return pick_worker(key, labels)
+        self._round_robin += 1
+        return labels[self._round_robin % len(labels)]
 
     # ---------- приём клиентов ----------
 
-    async def serve_tcp(self) -> None:
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind((self.host, self.port))
-        srv.listen(512)
-        srv.setblocking(False)
+    async def serve_tcp(self, listener: socket.socket) -> None:
+        """Принимать клиентов на уже открытом слушающем сокете."""
+        listener.setblocking(False)
         loop = asyncio.get_running_loop()
-        log(f"listening on {self.host}:{self.port}")
         while True:
             try:
-                conn, _ = await loop.sock_accept(srv)
-            except OSError as e:               # например, кончились дескрипторы (EMFILE)
+                conn, _ = await loop.sock_accept(listener)
+            except OSError as e:  # например, кончились дескрипторы (EMFILE)
                 log(f"accept failed: {e}")
                 await asyncio.sleep(0.1)
                 continue
-            if self.pending >= MAX_PENDING:    # не копим бесконечно недочитанные соединения
+            if self.pending >= MAX_PENDING:  # не копим бесконечно недочитанные соединения
                 conn.close()
                 continue
             self.pending += 1
-            asyncio.create_task(self.dispatch(conn))
+            self._spawn(self.dispatch(conn))
 
     async def dispatch(self, conn: socket.socket) -> None:
+        handed_over = False
         try:
             try:
-                head = await asyncio.wait_for(peek_request_line(conn), PEEK_TIMEOUT)
-            except asyncio.TimeoutError:
-                return                          # медленный клиент: молча закрываем
-            m = PATH_RE.match(head)
-            if not m:
+                head = await asyncio.wait_for(peek_request_line(conn), self.peek_timeout)
+            except TimeoutError:
+                return  # медленный клиент: молча закрываем
+            if not is_request_line(head):
                 reply(conn, "400 Bad Request")
                 return
             if not self.workers:
                 reply(conn, "503 Service Unavailable")
                 return
-            gid = m.group(1).decode()
-            label = self.pick_worker(gid)
+            label = self.choose(extract_key(head))
             try:
                 socket.send_fds(self.workers[label], [b"x"], [conn.fileno()])
-            except BlockingIOError:             # воркер не успевает разбирать очередь
+                handed_over = True
+            except BlockingIOError:  # воркер не успевает разбирать очередь
                 reply(conn, "503 Service Unavailable")
-                return
-            except OSError as e:                # воркер умер между выбором и отправкой
+            except OSError as e:  # воркер умер между выбором и отправкой
                 log(f"send to {label} failed: {e}")
                 reply(conn, "503 Service Unavailable")
-                return
-            log(f"gid={gid} -> {label}")
         except OSError as e:
             log(f"dispatch error: {e}")
         finally:
             self.pending -= 1
-            conn.close()                        # закрываем СВОЮ копию; у воркера своя
+            if not handed_over:
+                discard_unread(conn)
+            conn.close()  # после передачи закрываем только СВОЮ копию; у воркера своя
+
+
+def discard_unread(conn: socket.socket) -> None:
+    """
+    Выбросить непрочитанные данные перед закрытием соединения, которое мы не передали воркеру.
+    Если закрыть сокет с непрочитанными данными, ядро шлёт клиенту сброс (RST),
+    и он может не успеть получить наш ответ 400 или 503.
+    """
+    try:
+        while conn.recv(65536):
+            pass
+    except OSError:
+        pass  # читать больше нечего (или клиент уже ушёл)
 
 
 async def peek_request_line(conn: socket.socket) -> bytes:
@@ -218,22 +225,3 @@ async def wait_readable(loop: asyncio.AbstractEventLoop, sock: socket.socket) ->
         await fut
     finally:
         loop.remove_reader(sock.fileno())
-
-
-async def main() -> None:
-    prepare_run_dir()
-    r = Router()
-    try:
-        await asyncio.gather(r.serve_control(), r.serve_tcp())
-    finally:
-        try:
-            os.unlink(CONTROL_PATH)
-        except OSError:
-            pass
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass

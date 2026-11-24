@@ -1,4 +1,5 @@
 """Общие заготовки: запуск раннера в отдельном процессе и чтение его вывода."""
+
 import json
 import signal
 import socket
@@ -25,10 +26,17 @@ class RunnerProc:
 
     def __init__(self, app: str, workers: int) -> None:
         self.port = free_port()
-        code = ("from uvicorn_sticky import StickyConfig, run; "
-                f"run(StickyConfig(app={app!r}, workers={workers}, port={self.port}, log_level='warning'))")
-        self.proc = subprocess.Popen([sys.executable, "-u", "-c", code], cwd=ROOT,
-                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        code = (
+            "from uvicorn_sticky import StickyConfig, run; "
+            f"run(StickyConfig(app={app!r}, workers={workers}, port={self.port}, log_level='warning'))"
+        )
+        self.proc = subprocess.Popen(
+            [sys.executable, "-u", "-c", code],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
         self.lines: list[str] = []
         threading.Thread(target=self._pump, daemon=True).start()
 
@@ -41,11 +49,15 @@ class RunnerProc:
     def output(self) -> str:
         return "\n".join(self.lines)
 
-    def wait_for(self, text: str, timeout: float = 10.0) -> str:
-        """Ждём строку вывода, содержащую text. Возвращаем эту строку."""
+    def mark(self) -> int:
+        """Запомнить текущее место в выводе, чтобы потом искать только новые строки."""
+        return len(self.lines)
+
+    def wait_for(self, text: str, timeout: float = 10.0, since: int = 0) -> str:
+        """Ждём строку вывода, содержащую text (начиная с места since). Возвращаем эту строку."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            for line in self.lines:
+            for line in self.lines[since:]:
                 if text in line:
                     return line
             if self.proc.poll() is not None:
@@ -74,7 +86,7 @@ class RunnerProc:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
-        time.sleep(0.1)                       # даём потоку дочитать вывод
+        time.sleep(0.1)  # даём потоку дочитать вывод
         return self.proc.returncode
 
 

@@ -1,4 +1,5 @@
 """StickyConfig: значения по умолчанию и проверка входных данных."""
+
 import pytest
 
 from uvicorn_sticky import StickyConfig
@@ -17,10 +18,12 @@ def test_label_for_uses_template():
 def test_config_is_immutable():
     c = StickyConfig(app="pkg.mod:app")
     with pytest.raises(AttributeError):
-        c.port = 9000 # type: ignore[misc]
+        c.port = 9000  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("app", ["", "nope", "pkg.mod:", ":app", "a:b:c", "examples:fastapi_ex:main:app"])
+@pytest.mark.parametrize(
+    "app", ["", "nope", "pkg.mod:", ":app", "a:b:c", "examples:fastapi_ex:main:app"]
+)
 def test_bad_app_rejected(app):
     with pytest.raises(ValueError, match="app должен быть вида"):
         StickyConfig(app=app)

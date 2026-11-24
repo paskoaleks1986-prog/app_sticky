@@ -17,10 +17,7 @@ import asyncio
 import json
 import os
 import random
-
 from collections.abc import AsyncIterator
-from django.views.decorators.csrf import csrf_exempt
-from django.http.response import HttpResponseBase
 
 from django.http import (
     HttpRequest,
@@ -28,6 +25,8 @@ from django.http import (
     JsonResponse,
     StreamingHttpResponse,
 )
+from django.http.response import HttpResponseBase
+from django.views.decorators.csrf import csrf_exempt
 
 WORKER_PID = os.getpid()
 

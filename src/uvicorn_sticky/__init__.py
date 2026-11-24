@@ -6,4 +6,6 @@ from .config import StickyConfig
 from .runner import run
 from .worker import WorkerInfo, current_worker
 
-__all__ = ["__version__",]
+__all__ = [
+    "__version__",
+]

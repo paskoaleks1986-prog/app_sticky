@@ -1,4 +1,5 @@
 """Команда: uvicorn-sticky пакет.модуль:app --workers 4"""
+
 import argparse
 
 from .config import StickyConfig

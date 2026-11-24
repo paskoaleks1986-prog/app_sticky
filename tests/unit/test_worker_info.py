@@ -1,4 +1,5 @@
 """current_worker(): приложение узнаёт, в каком воркере оно работает."""
+
 import dataclasses
 
 import pytest
