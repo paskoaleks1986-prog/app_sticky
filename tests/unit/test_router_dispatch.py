@@ -40,9 +40,7 @@ class FakeWorker:
                 conn.setblocking(False)
                 request = await loop.sock_recv(conn, 65536)  # запрос должен прийти целиком
                 body = f"{self.label}|{len(request)}".encode()
-                await loop.sock_sendall(
-                    conn, b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
-                )
+                await loop.sock_sendall(conn, b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
                 conn.close()
 
     async def die(self) -> None:

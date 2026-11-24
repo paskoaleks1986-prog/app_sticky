@@ -13,14 +13,13 @@ class StickyConfig:
     host: str = "127.0.0.1"
     port: int = 8000
     label: str = "W{index}"  # шаблон имени воркера: W0, W1, ...
+    restart: bool = True  # поднимать ли воркер заново, если он упал
     log_level: str = "info"
 
     def __post_init__(self) -> None:
         module, sep, attr = self.app.partition(":")
         if not sep or not module or not attr or ":" in attr:
-            raise ValueError(
-                f'app должен быть вида "пакет.модуль:переменная", получено {self.app!r}'
-            )
+            raise ValueError(f'app должен быть вида "пакет.модуль:переменная", получено {self.app!r}')
         if self.workers < 1:
             raise ValueError(f"workers должен быть не меньше 1, получено {self.workers}")
         if not 1 <= self.port <= 65535:

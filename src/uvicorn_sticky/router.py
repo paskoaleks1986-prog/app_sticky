@@ -7,6 +7,7 @@ Unix-сокет (SCM_RIGHTS). Все соединения с одним ключ
 """
 
 import asyncio
+import contextlib
 import os
 import socket
 import struct
@@ -30,17 +31,14 @@ def peer_uid(sock: socket.socket) -> int | None:
     """UID процесса на другом конце Unix-сокета (Linux)."""
     if not hasattr(socket, "SO_PEERCRED"):
         return None
-    _pid, uid, _gid = struct.unpack(
-        "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-    )
+    _pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
     return uid
 
 
 def reply(conn: socket.socket, status: str) -> None:
-    try:
+    # Клиент мог уже уйти: тогда отвечать некому, и ошибку отправки пропускаем.
+    with contextlib.suppress(OSError):
         conn.send(f"HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode())
-    except OSError:
-        pass  # клиент уже ушёл: отвечать некому
 
 
 class Router:

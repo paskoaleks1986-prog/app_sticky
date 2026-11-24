@@ -8,6 +8,7 @@ from uvicorn_sticky import StickyConfig
 def test_defaults():
     c = StickyConfig(app="pkg.mod:app")
     assert (c.workers, c.host, c.port, c.label) == (1, "127.0.0.1", 8000, "W{index}")
+    assert c.restart is True
 
 
 def test_label_for_uses_template():
@@ -18,12 +19,10 @@ def test_label_for_uses_template():
 def test_config_is_immutable():
     c = StickyConfig(app="pkg.mod:app")
     with pytest.raises(AttributeError):
-        c.port = 9000  # type: ignore[misc]
+        c.port = 9000 # type: ignore[misc]
 
 
-@pytest.mark.parametrize(
-    "app", ["", "nope", "pkg.mod:", ":app", "a:b:c", "examples:fastapi_ex:main:app"]
-)
+@pytest.mark.parametrize("app", ["", "nope", "pkg.mod:", ":app", "a:b:c", "examples:fastapi_ex:main:app"])
 def test_bad_app_rejected(app):
     with pytest.raises(ValueError, match="app должен быть вида"):
         StickyConfig(app=app)

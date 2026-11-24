@@ -33,7 +33,7 @@ def test_each_instance_knows_its_label(start_runner):
 
 
 def test_killed_worker_disappears(start_runner):
-    r = start_runner(workers=3)
+    r = start_runner(workers=3, restart=False)
     r.wait_for("на связи 3/3")
     before_kill = r.mark()  # при старте такая же строка могла уже мелькнуть
     os.kill(r.worker_pids()["W1"], signal.SIGKILL)

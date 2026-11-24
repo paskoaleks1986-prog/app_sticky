@@ -43,9 +43,7 @@ def wait_until_up(proc: subprocess.Popen, port: int, path: str) -> dict:
     assert proc.stdout is not None
     for _ in range(50):
         if proc.poll() is not None:
-            raise AssertionError(
-                f"процесс завершился с кодом {proc.returncode}:\n{proc.stdout.read()}"
-            )
+            raise AssertionError(f"процесс завершился с кодом {proc.returncode}:\n{proc.stdout.read()}")
         try:
             return get(port, path)
         except urllib.error.HTTPError as e:  # сервер жив, но отвечает ошибкой

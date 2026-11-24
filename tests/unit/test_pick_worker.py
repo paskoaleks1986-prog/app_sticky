@@ -42,5 +42,5 @@ def test_keys_spread_roughly_evenly():
 
 
 def test_no_workers_is_an_error():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="нет ни одного воркера"):
         pick_worker("abc", [])

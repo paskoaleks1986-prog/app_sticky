@@ -24,18 +24,15 @@ def free_port() -> int:
 class RunnerProc:
     """Раннер, запущенный как отдельный процесс. Вывод копится в self.lines."""
 
-    def __init__(self, app: str, workers: int) -> None:
+    def __init__(self, app: str, workers: int, restart: bool = True) -> None:
         self.port = free_port()
         code = (
             "from uvicorn_sticky import StickyConfig, run; "
-            f"run(StickyConfig(app={app!r}, workers={workers}, port={self.port}, log_level='warning'))"
+            f"run(StickyConfig(app={app!r}, workers={workers}, port={self.port}, "
+            f"restart={restart}, log_level='warning'))"
         )
         self.proc = subprocess.Popen(
-            [sys.executable, "-u", "-c", code],
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+            [sys.executable, "-u", "-c", code], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
         self.lines: list[str] = []
         threading.Thread(target=self._pump, daemon=True).start()
@@ -94,8 +91,8 @@ class RunnerProc:
 def start_runner():
     started: list[RunnerProc] = []
 
-    def _start(workers: int, app: str = "examples.fastapi_ex.main:app") -> RunnerProc:
-        r = RunnerProc(app, workers)
+    def _start(workers: int, app: str = "examples.fastapi_ex.main:app", restart: bool = True) -> RunnerProc:
+        r = RunnerProc(app, workers, restart)
         started.append(r)
         return r
 

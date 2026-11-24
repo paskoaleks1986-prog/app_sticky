@@ -7,5 +7,9 @@ from .runner import run
 from .worker import WorkerInfo, current_worker
 
 __all__ = [
+    "StickyConfig",
+    "WorkerInfo",
     "__version__",
+    "current_worker",
+    "run",
 ]

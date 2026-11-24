@@ -56,7 +56,7 @@ def test_garbage_gets_400(start_runner):
 
 
 def test_killed_workers_key_moves_and_stays(start_runner):
-    r = start_runner(workers=3)
+    r = start_runner(workers=3, restart=False)
     r.wait_for("на связи 3/3")
     key = next(k for k in (f"k{i}" for i in range(100)) if pick_worker(k, LABELS) == "W1")
     assert r.get(f"/ws/{key}")["worker"] == "W1"

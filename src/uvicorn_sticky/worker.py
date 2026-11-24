@@ -112,9 +112,7 @@ class StickyServer(uvicorn.Server):
     def _adopted(self, task: asyncio.Task) -> None:
         self._adopting.discard(task)
         if not task.cancelled() and task.exception() is not None:
-            print(
-                f"[{self._label}] не удалось принять соединение: {task.exception()!r}", flush=True
-            )
+            print(f"[{self._label}] не удалось принять соединение: {task.exception()!r}", flush=True)
 
     def _close_control(self) -> None:
         if self._control is not None:
@@ -136,7 +134,5 @@ def worker_main(config: StickyConfig, index: int, control_path: str) -> None:
     info = WorkerInfo(label=config.label_for(index), index=index, total=config.workers)
     _set_current(info)  # до импорта приложения: оно может спросить current_worker()
 
-    server = StickyServer(
-        uvicorn.Config(config.app, log_level=config.log_level), control_path, info.label
-    )
+    server = StickyServer(uvicorn.Config(config.app, log_level=config.log_level), control_path, info.label)
     server.run()  # блокирует, пока воркер не остановят
